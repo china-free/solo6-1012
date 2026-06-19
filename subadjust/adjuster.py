@@ -1,11 +1,34 @@
 """
 核心校正算法
-支持：整体偏移、分段校正、倍速校正、参考字幕对齐
+支持：整体偏移、分段校正、倍速校正、参考字幕对齐（可插拔对齐算法）
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from .models import Subtitle, Cue
 from .report import AdjustmentReport, CueAdjustment
+from .aligners import (
+    BaseAligner, AlignerResult,
+    get_aligner, list_aligners, ALIGNERS,
+)
+
+
+DEFAULT_ALIGNER = 'linear_scale'
+
+
+def _apply_linear_mapping(subtitle: Subtitle, scale: float, offset: float) -> List[CueAdjustment]:
+    """应用线性映射到所有字幕并返回调整记录"""
+    adjustments: List[CueAdjustment] = []
+    original_cues = [cue.clone() for cue in subtitle.cues]
+    for original, cue in zip(original_cues, subtitle.cues):
+        cue.start = cue.start * scale + offset
+        cue.end = cue.end * scale + offset
+        if cue.start < 0:
+            cue.start = 0.0
+        if cue.end < cue.start:
+            cue.end = cue.start
+        _record_adjustment(original, cue, adjustments)
+    subtitle.sort_cues()
+    return adjustments
 
 
 def _record_adjustment(original_cue: Cue, new_cue: Cue,
@@ -205,40 +228,30 @@ def apply_linear_scale(subtitle: Subtitle, scale: float,
     )
 
 
-def _find_linear_mapping(src_points: List[float],
-                         dst_points: List[float]) -> Tuple[float, float]:
+def align_to_reference(subtitle: Subtitle, reference: Subtitle,
+                       algorithm: Optional[Union[str, BaseAligner]] = None
+                       ) -> AdjustmentReport:
     """
-    通过两组对应点计算线性映射系数 y = scale * x + offset
-    使用最小二乘法
-    """
-    n = len(src_points)
-    if n < 2:
-        return 1.0, (dst_points[0] - src_points[0]) if n >= 1 else 0.0
-    sum_x = sum(src_points)
-    sum_y = sum(dst_points)
-    sum_xy = sum(x * y for x, y in zip(src_points, dst_points))
-    sum_xx = sum(x * x for x in src_points)
-    denom = n * sum_xx - sum_x * sum_x
-    if abs(denom) < 1e-10:
-        return 1.0, (sum_y - sum_x) / n
-    scale = (n * sum_xy - sum_x * sum_y) / denom
-    offset = (sum_y - scale * sum_x) / n
-    return scale, offset
-
-
-def align_to_reference(subtitle: Subtitle, reference: Subtitle) -> AdjustmentReport:
-    """
-    根据参考字幕对齐时间轴
-
-    通过匹配字幕文本或时间顺序找到对应点，计算线性映射进行对齐
+    根据参考字幕对齐时间轴（可插拔算法）
 
     Args:
         subtitle: 待校正字幕
         reference: 参考字幕（正确时间轴）
+        algorithm: 对齐算法，可选字符串名称或 BaseAligner 实例
+                   可用: 'linear_scale'（默认）、'text_similarity'、'time_series'
 
     Returns:
         校正报告
     """
+    if algorithm is None:
+        algorithm = DEFAULT_ALIGNER
+    if isinstance(algorithm, str):
+        aligner = get_aligner(algorithm)
+    elif isinstance(algorithm, BaseAligner):
+        aligner = algorithm
+    else:
+        raise ValueError(f'algorithm 必须是字符串或 BaseAligner 实例，实际: {type(algorithm)}')
+
     if not reference.cues or not subtitle.cues:
         return AdjustmentReport(
             format=subtitle.format,
@@ -246,61 +259,24 @@ def align_to_reference(subtitle: Subtitle, reference: Subtitle) -> AdjustmentRep
             adjusted_cue_count=0,
             adjustments=[],
             method='align_reference',
-            method_params={}
+            method_params={'algorithm': aligner.name}
         )
 
-    src_starts: List[float] = []
-    dst_starts: List[float] = []
+    result = aligner.compute(subtitle, reference)
+    adjustments = _apply_linear_mapping(subtitle, result.scale, result.offset)
 
-    src_text_map = {}
-    for cue in subtitle.cues:
-        text = cue.text.strip().lower()
-        if text:
-            src_text_map[text] = cue.start
-
-    for ref_cue in reference.cues:
-        text = ref_cue.text.strip().lower()
-        if text and text in src_text_map:
-            src_starts.append(src_text_map[text])
-            dst_starts.append(ref_cue.start)
-
-    if len(src_starts) < 2:
-        n = min(len(subtitle.cues), len(reference.cues))
-        if n >= 2:
-            src_starts = [subtitle.cues[i].start for i in range(0, n, max(1, n // 5))]
-            dst_starts = [reference.cues[i].start for i in range(0, n, max(1, n // 5))]
-            if len(src_starts) < 2 and n >= 2:
-                src_starts = [subtitle.cues[0].start, subtitle.cues[-1].start]
-                dst_starts = [reference.cues[0].start, reference.cues[-1].start]
-
-    if len(src_starts) < 2:
-        if reference.cues and subtitle.cues:
-            offset = reference.cues[0].start - subtitle.cues[0].start
-            return apply_offset(subtitle, offset)
-        return AdjustmentReport(
-            format=subtitle.format,
-            original_cue_count=len(subtitle.cues),
-            adjusted_cue_count=0,
-            adjustments=[],
-            method='align_reference',
-            method_params={}
-        )
-
-    scale, offset = _find_linear_mapping(src_starts, dst_starts)
-
-    adjustments: List[CueAdjustment] = []
-    original_cues = [cue.clone() for cue in subtitle.cues]
-
-    for original, cue in zip(original_cues, subtitle.cues):
-        cue.start = cue.start * scale + offset
-        cue.end = cue.end * scale + offset
-        if cue.start < 0:
-            cue.start = 0.0
-        if cue.end < cue.start:
-            cue.end = cue.start
-        _record_adjustment(original, cue, adjustments)
-
-    subtitle.sort_cues()
+    params = {
+        'algorithm': aligner.name,
+        'scale': result.scale,
+        'offset': result.offset,
+        **result.params,
+    }
+    if result.matched_points:
+        params['matched_points_count'] = len(result.matched_points)
+        if len(result.matched_points) <= 10:
+            params['matched_points'] = [
+                {'src': s, 'ref': r} for s, r in result.matched_points
+            ]
 
     return AdjustmentReport(
         format=subtitle.format,
@@ -308,9 +284,5 @@ def align_to_reference(subtitle: Subtitle, reference: Subtitle) -> AdjustmentRep
         adjusted_cue_count=len(adjustments),
         adjustments=adjustments,
         method='align_reference',
-        method_params={
-            'matched_points': len(src_starts),
-            'scale': scale,
-            'offset': offset,
-        }
+        method_params=params
     )

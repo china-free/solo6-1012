@@ -25,6 +25,17 @@ from .formats import (
     parse_vtt,
     write_vtt,
 )
+from .aligners import (
+    BaseAligner,
+    AlignerResult,
+    get_aligner,
+    list_aligners,
+    register_aligner,
+    ALIGNERS,
+    LinearScaleAligner,
+    TextSimilarityAligner,
+    TimeSeriesAligner,
+)
 
 __all__ = [
     '__version__',
@@ -47,4 +58,13 @@ __all__ = [
     'write_ass',
     'parse_vtt',
     'write_vtt',
+    'BaseAligner',
+    'AlignerResult',
+    'get_aligner',
+    'list_aligners',
+    'register_aligner',
+    'ALIGNERS',
+    'LinearScaleAligner',
+    'TextSimilarityAligner',
+    'TimeSeriesAligner',
 ]

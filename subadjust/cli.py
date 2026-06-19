@@ -129,12 +129,16 @@ def _process_file(input_path: str, args: argparse.Namespace) -> Optional[Adjustm
         report = apply_linear_scale(subtitle, args.scale, anchor)
 
     elif args.command == 'align':
+        if not args.reference:
+            print('错误: align 命令需要 -r/--reference 指定参考字幕文件',
+                  file=sys.stderr)
+            return None
         try:
             reference = load_subtitle(args.reference)
         except Exception as e:
             print(f'错误: 无法加载参考字幕 {args.reference}: {e}', file=sys.stderr)
             return None
-        report = align_to_reference(subtitle, reference)
+        report = align_to_reference(subtitle, reference, algorithm=args.algorithm)
 
     if report is None:
         return None
@@ -211,14 +215,20 @@ def build_parser() -> argparse.ArgumentParser:
     scale_parser.add_argument('--anchor', type=str, default=None,
                               help='锚点时间（秒），该点时间不变，默认 0')
 
-    align_parser = subparsers.add_parser('align', help='根据参考字幕对齐')
-    align_parser.add_argument('-r', '--reference', type=str, required=True,
+    align_parser = subparsers.add_parser('align', help='根据参考字幕对齐',
+                                         add_help=True)
+    align_parser.add_argument('-r', '--reference', type=str, default=None,
                               help='参考字幕文件（正确时间轴）')
+    align_parser.add_argument('-a', '--algorithm', type=str, default=None,
+                              help='对齐算法：linear_scale（默认）、text_similarity、time_series，'
+                                   '或用 --list-algorithms 查看全部')
+    align_parser.add_argument('--list-algorithms', action='store_true',
+                              help='列出所有可用的对齐算法并退出')
 
     for sub in (offset_parser, segment_parser, speed_parser,
                 scale_parser, align_parser):
-        sub.add_argument('inputs', nargs='+',
-                         help='输入字幕文件或目录')
+        sub.add_argument('inputs', nargs='*',
+                         help='输入字幕文件或目录（align 下 --list-algorithms 时可不填）')
         sub.add_argument('-o', '--output', type=str, default=None,
                          help='输出文件或目录（不指定则添加后缀）')
         sub.add_argument('--suffix', type=str, default='.adjusted',
@@ -244,8 +254,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if getattr(args, 'list_algorithms', False):
+        from .aligners import list_aligners
+        print('可用的对齐算法:')
+        for name, desc in list_aligners():
+            print(f'  {name:<20} - {desc}')
+        return 0
+
     if getattr(args, 'in_place', False):
         args.suffix = ''
+
+    if not getattr(args, 'inputs', None):
+        print('错误: 请指定至少一个输入字幕文件或目录', file=sys.stderr)
+        return 1
 
     files = _collect_files(args.inputs, getattr(args, 'recursive', False))
 

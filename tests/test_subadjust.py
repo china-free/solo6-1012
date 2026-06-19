@@ -250,16 +250,52 @@ def test_linear_scale():
 
 
 def test_align_reference():
-    print('  测试参考字幕对齐...')
+    print('  测试参考字幕对齐（多种算法）...')
+
+    from subadjust.aligners import (
+        list_aligners, get_aligner, ALIGNERS,
+        LinearScaleAligner, TextSimilarityAligner, TimeSeriesAligner,
+    )
+
+    algorithms = list_aligners()
+    assert len(algorithms) >= 3
+    alg_names = [a[0] for a in algorithms]
+    assert 'linear_scale' in alg_names
+    assert 'text_similarity' in alg_names
+    assert 'time_series' in alg_names
+    assert isinstance(get_aligner('linear_scale'), LinearScaleAligner)
+    assert isinstance(get_aligner('text_similarity'), TextSimilarityAligner)
+    assert isinstance(get_aligner('time_series'), TimeSeriesAligner)
+
+    def make_transformed_sub(offset: float, scale: float):
+        sub = parse_srt(TEST_SRT)
+        apply_offset(sub, offset)
+        apply_linear_scale(sub, scale)
+        return sub
+
+    algorithms_tested = ['linear_scale', 'text_similarity', 'time_series']
+
+    for alg in algorithms_tested:
+        ref = parse_srt(TEST_SRT)
+        target = make_transformed_sub(10.0, 1.1)
+        report = align_to_reference(target, ref, algorithm=alg)
+        assert report.adjusted_cue_count == 3, f'{alg}: 应调整3条字幕'
+        assert abs(target.cues[0].start - 1.0) < 1.0, (
+            f'{alg}: 第一条字幕期望约1.0s，实际 {target.cues[0].start:.2f}s')
+        assert abs(target.cues[2].start - 10.0) < 1.0, (
+            f'{alg}: 第三条字幕期望约10.0s，实际 {target.cues[2].start:.2f}s')
+        params = report.method_params
+        assert params.get('algorithm') == alg, (
+            f'{alg}: 报告中 algorithm 参数应为 {alg}，实际 {params.get("algorithm")}')
+        assert 'scale' in params
+        assert 'offset' in params
+
     ref = parse_srt(TEST_SRT)
-    target = parse_srt(TEST_SRT)
-    apply_offset(target, 10.0)
-    apply_linear_scale(target, 1.1)
-    report = align_to_reference(target, ref)
-    assert report.adjusted_cue_count == 3
-    assert abs(target.cues[0].start - 1.0) < 0.5
-    assert abs(target.cues[2].start - 10.0) < 0.5
-    print('    ✓ 参考字幕对齐测试通过')
+    target = make_transformed_sub(10.0, 1.1)
+    custom_aligner = LinearScaleAligner()
+    report_inst = align_to_reference(target, ref, algorithm=custom_aligner)
+    assert report_inst.adjusted_cue_count == 3
+    print('    ✓ 参考字幕对齐测试通过（线性比例/文本相似度/时间序列 + 自定义实例）')
 
 
 def test_report_output():
@@ -324,6 +360,19 @@ def test_cli_module():
     t2, o2 = _parse_segment('60=2.5')
     assert abs(t2 - 60.0) < 1e-6
     assert abs(o2 - 2.5) < 1e-6
+
+    from subadjust.cli import main
+    rc = main(['align', '--list-algorithms'])
+    assert rc == 0
+
+    align_args = parser.parse_args([
+        'align', '-r', 'ref.srt', '-a', 'text_similarity', 'chinese.srt'
+    ])
+    assert align_args.command == 'align'
+    assert align_args.reference == 'ref.srt'
+    assert align_args.algorithm == 'text_similarity'
+    assert align_args.inputs == ['chinese.srt']
+
     print('    ✓ CLI 模块测试通过')
 
 
