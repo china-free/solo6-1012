@@ -132,6 +132,43 @@ def test_ass_format():
     for a, b in zip(sub.cues, sub2.cues):
         assert abs(a.start - b.start) < 1e-2
         assert abs(a.end - b.end) < 1e-2
+    assert sub.metadata.get('_format_fields') == [
+        'Layer', 'Start', 'End', 'Style', 'Name', 'MarginL',
+        'MarginR', 'MarginV', 'Effect', 'Text'
+    ]
+
+    TEST_ASS_CUSTOM_ORDER = """[Script Info]
+Title: Test Custom
+
+[Events]
+Format: Style, Name, Layer, Start, End, Text, Effect, MarginL, MarginR, MarginV
+Dialogue: Default,Alice,0,0:00:01.00,0:00:03.00,Hello world,,0,0,0
+Dialogue: Default,Bob,0,0:00:05.00,0:00:07.50,Hi there,,0,0,0
+"""
+    sub3 = parse_ass(TEST_ASS_CUSTOM_ORDER)
+    assert sub3.cue_count == 2
+    assert sub3.cues[0].style == 'Default'
+    assert sub3.cues[0].extra.get('Name') == 'Alice'
+    assert abs(sub3.cues[0].start - 1.0) < 1e-6
+    assert abs(sub3.cues[0].end - 3.0) < 1e-6
+    assert sub3.cues[0].text == 'Hello world'
+    assert sub3.cues[1].extra.get('Name') == 'Bob'
+    assert sub3.cues[1].text == 'Hi there'
+
+    output3 = write_ass(sub3)
+    assert 'Style, Name, Layer, Start, End, Text, Effect, MarginL, MarginR, MarginV' in output3
+    lines_out = output3.splitlines()
+    for line in lines_out:
+        if line.startswith('Dialogue:'):
+            parts = line[len('Dialogue: '):].split(',', 5)
+            assert parts[0] == 'Default', f'第一个字段应为 Style，实际: {parts[0]}'
+            assert parts[2] == '0', f'第三个字段应为 Layer，实际: {parts[2]}'
+            break
+    sub4 = parse_ass(output3)
+    assert sub4.cue_count == 2
+    assert sub4.cues[0].style == 'Default'
+    assert sub4.cues[0].extra.get('Name') == 'Alice'
+    assert abs(sub4.cues[0].start - 1.0) < 1e-2
     print('    ✓ ASS 格式测试通过')
 
 
@@ -173,11 +210,18 @@ def test_offset_adjust():
 def test_segmented_adjust():
     print('  测试分段偏移校正...')
     sub = parse_srt(TEST_SRT)
-    report = apply_segmented_offsets(sub, [(0, 1.0), (6.0, 3.0)])
+    report = apply_segmented_offsets(sub, [(0, 1.0), (6.0, 2.0)])
     assert report.adjusted_cue_count == 3
     assert abs(sub.cues[0].start - 2.0) < 1e-6
     assert abs(sub.cues[1].start - 6.0) < 1e-6
     assert abs(sub.cues[2].start - 13.0) < 1e-6
+
+    sub2 = parse_srt(TEST_SRT)
+    report2 = apply_segmented_offsets(sub2, [(0, 1.0), (6.0, 3.0)])
+    assert report2.adjusted_cue_count == 3
+    assert abs(sub2.cues[0].start - 2.0) < 1e-6
+    assert abs(sub2.cues[1].start - 6.0) < 1e-6
+    assert abs(sub2.cues[2].start - 14.0) < 1e-6
     print('    ✓ 分段偏移校正测试通过')
 
 

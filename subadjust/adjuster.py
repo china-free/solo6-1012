@@ -85,7 +85,7 @@ def apply_segmented_offsets(subtitle: Subtitle,
         offset = 0.0
         for seg_start, seg_offset in segments:
             if time_point >= seg_start:
-                offset = seg_offset
+                offset += seg_offset
             else:
                 break
         return offset

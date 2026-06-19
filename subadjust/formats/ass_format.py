@@ -127,7 +127,7 @@ def parse_ass(content: str) -> Subtitle:
         cues=cues,
         header='\n'.join(header_lines) + '\n',
         footer='',
-        metadata=metadata
+        metadata={**metadata, '_format_fields': format_fields}
     )
 
 
@@ -138,21 +138,42 @@ def write_ass(subtitle: Subtitle) -> str:
     if header:
         lines.append(header)
 
+    format_fields = subtitle.metadata.get('_format_fields') or [
+        'Layer', 'Start', 'End', 'Style', 'Name', 'MarginL',
+        'MarginR', 'MarginV', 'Effect', 'Text'
+    ]
+
+    default_values = {
+        'Layer': '0',
+        'Start': '0:00:00.00',
+        'End': '0:00:00.00',
+        'Style': 'Default',
+        'Name': '',
+        'MarginL': '0000',
+        'MarginR': '0000',
+        'MarginV': '0000',
+        'Effect': '',
+        'Text': '',
+    }
+
     for cue in subtitle.cues:
         extra = dict(cue.extra)
-        layer = extra.get('Layer', '0')
-        name = extra.get('Name', '')
-        margin_l = extra.get('MarginL', '0000')
-        margin_r = extra.get('MarginR', '0000')
-        margin_v = extra.get('MarginV', '0000')
-        effect = extra.get('Effect', '')
-        style = cue.style or 'Default'
-        start_str = format_ass_time(cue.start)
-        end_str = format_ass_time(cue.end)
-        dialogue = (
-            f'Dialogue: {layer},{start_str},{end_str},{style},'
-            f'{name},{margin_l},{margin_r},{margin_v},{effect},{cue.text}'
-        )
+        field_values = {}
+        for fname in format_fields:
+            if fname == 'Start':
+                field_values[fname] = format_ass_time(cue.start)
+            elif fname == 'End':
+                field_values[fname] = format_ass_time(cue.end)
+            elif fname == 'Style':
+                field_values[fname] = cue.style or extra.get('Style', default_values['Style'])
+            elif fname == 'Text':
+                field_values[fname] = cue.text
+            else:
+                field_values[fname] = extra.get(fname, default_values.get(fname, ''))
+
+        ordered_values = [field_values.get(fname, default_values.get(fname, ''))
+                          for fname in format_fields]
+        dialogue = 'Dialogue: ' + ','.join(ordered_values)
         lines.append(dialogue)
 
     if subtitle.footer:
